@@ -34,14 +34,27 @@ document.querySelectorAll("td.left").forEach(function (td) {
   if (a > d) { m--; a = new Date(t.getFullYear(), t.getMonth() + m, t.getDate()); }
   var days = Math.round((d - a) / 86400000);
   td.textContent = (m ? m + "mo " : "") + days + "d";
-});"""
+});
+// relative time of the last download, appended after the absolute one
+var el = document.getElementById("dl");
+if (el && el.dateTime) {
+  var h = Math.round((now - new Date(el.dateTime)) / 3600000);
+  el.insertAdjacentText("afterend", " (" + (h < 1 ? "just now" : h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago") + ")");
+}"""
 
 today = dt.date.today().isoformat()
 # last download = newest file in the cache (files are only written when fetched)
 mtimes = [os.path.getmtime(p) for p in glob.glob("cache/**", recursive=True) if os.path.isfile(p)]
-downloaded = (dt.datetime.fromtimestamp(max(mtimes), ZoneInfo("Europe/Berlin"))
-              .strftime("%Y-%m-%d %H:%M %Z")
-              if mtimes else "never")
+dl_time = dt.datetime.fromtimestamp(max(mtimes), ZoneInfo("Europe/Berlin")) if mtimes else None
+downloaded = ('<time id="dl" datetime="%s">%s</time>' % (dl_time.isoformat(), dl_time.strftime("%Y-%m-%d %H:%M %Z"))
+              if dl_time else "never")
+
+
+def pretty(iso):
+    d = dt.date.fromisoformat(iso)
+    suffix = "th" if 11 <= d.day <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(d.day % 10, "th")
+    return f"{d:%b} {d.day}{suffix}"
+
 def shift_year(iso, years):
     d = dt.date.fromisoformat(iso)
     try:
@@ -72,17 +85,19 @@ rows.sort(key=lambda e: e["deadline"])
 
 esc = html.escape
 out = ["<!DOCTYPE html>", '<html lang="en"><head><meta charset="utf-8">',
-       "<title>Deadlines</title>", "<style>tr.est { color: #888; }</style></head><body>", "<h1>Deadlines</h1>",
+       "<title>Deadlines</title>", "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+       "<style>body { font-family: sans-serif; margin: 0.5em; } table { border-collapse: collapse; }"
+       " td, th { padding: 4px; border: 1px solid #ccc; text-align: left; } tr.est { color: #888; }</style></head><body>", "<h1>Deadlines</h1>",
        f"<p>Data downloaded {downloaded}."
        + (f" {hidden} past deadlines hidden." if hidden else "") + "</p>",
-       "<table border=\"1\" cellpadding=\"4\">",
+       "<table>",
        "<tr><th>Conference</th><th>Location</th><th>Deadline</th><th>Left</th></tr>"]
 for e in rows:
     name = esc(e["conf"] + (" " + e["round"] if e.get("round") else ""))
     if e.get("url"):
         name = f'<a href="{esc(e["url"], quote=True)}">{name}</a>'
     out.append(f"<tr{' class=\"est\"' if e.get('estimated') else ''}><td>{name}</td><td>{esc(e.get('location') or '')}</td>"
-               f"<td>{esc(e['deadline'])}{' (estimated)' if e.get('estimated') else ''}</td>"
+               f"<td>{'~' if e.get('estimated') else ''}{pretty(e['deadline'])}</td>"
                f"<td class=\"left\" data-date=\"{esc(e['deadline'])}\"></td></tr>")
 out += ["</table>", "<script>", SCRIPT, "</script>", "</body></html>"]
 open(dst, "w", encoding="utf-8").write("\n".join(out) + "\n")
