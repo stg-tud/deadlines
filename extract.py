@@ -197,9 +197,13 @@ def location_from_home(conf, edition):
     return None
 
 
-def dates_table(text, track):
+RESPONSE_RE = re.compile(r"author response|rebuttal", re.I)
+
+
+def dates_table(text, track, response=False):
     """{round or None: date} from an "Important Dates" table (When | Track | What)
-    for the rows of the given track."""
+    for the rows of the given track: paper deadlines, or with response=True
+    the start of the author response period."""
     lines = [" ".join(l.split()) for l in text.splitlines() if l.strip()]
     out = {}
     for k in range(len(lines) - 2):
@@ -209,9 +213,40 @@ def dates_table(text, track):
         if lines[k + 1] != track:
             continue
         what = lines[k + 2]
-        if LABEL_RE.search(what) and not LABEL_SKIP_RE.search(what):
+        if response and RESPONSE_RE.search(what):
+            r = round_of(what)
+            start = found[0][0]
+            m = re.match(r"(?:\w{3}\s+)?(\d{1,2})\s*-\s*(?:\w{3}\s+)?\d{1,2}\s", lines[k])
+            if m:  # "Mon 7 - Thu 10 Sep 2026": the period starts on the 7th
+                first = int(m.group(1))
+                if first > start.day:  # range crosses a month boundary
+                    start = (start.replace(day=1) - dt.timedelta(days=1))
+                start = start.replace(day=first)
+            out[r] = min(out.get(r, start), start)
+        elif not response and LABEL_RE.search(what) and not LABEL_SKIP_RE.search(what):
             r = round_of(what)
             out[r] = max(out.get(r, found[0][0]), found[0][0])
+    return out
+
+
+RANGE_RE = re.compile(MONTH_RE + r"\s+(\d{1,2})(?:\s*[-–]\s*\d{1,2})?,?\s+(\d{4})", re.I)
+
+
+def responses_from_text(text):
+    """{round or None: start date} from call-for-papers lines like
+    "Rebuttal: July 20-22, 2026" under a "Round 1:" heading."""
+    out, cur = {}, None
+    for line in text.splitlines():
+        line = " ".join(line.split())
+        if not RESPONSE_RE.match(line):
+            if round_of(line) and len(line) <= 60:
+                cur = round_of(line)
+            continue
+        m = RANGE_RE.search(line)
+        if m:
+            d = dt.date(int(m.group(3)), MONTHS[m.group(1)[:3].lower()], int(m.group(2)))
+            r = round_of(line) or cur
+            out[r] = min(out.get(r, d), d)
     return out
 
 
@@ -223,12 +258,16 @@ def read_text(path):
 
 
 def edition_data(conf, edition):
-    """({round: date}, location) of one edition, from its cached pages.
+    """({round: date}, location, {round: response date}) of one edition, from its cached pages.
     The important-dates table wins over the call-for-papers page, per round."""
     cfp = read_text(f"{CACHE}/page_{conf}_{edition}.html")
     dates = read_text(dates_cache(conf, edition)) if conf in DATES else None
     deadlines = extract_deadlines(cfp) if cfp else {}
+    responses = responses_from_text(cfp) if cfp else {}
     if dates:
+        responses.update(dates_table(dates, DATES[conf][1], response=True))
+        if len(responses) > 1:
+            responses.pop(None, None)
         table = dates_table(dates, DATES[conf][1])
         if table:
             deadlines.update(table)
@@ -240,7 +279,7 @@ def edition_data(conf, edition):
         if m:
             loc = " ".join(m.group(m.lastindex).split())
             break
-    return deadlines, loc or location_from_home(conf, edition)
+    return deadlines, loc or location_from_home(conf, edition), responses
 
 
 def page_entries(entries):
@@ -250,12 +289,14 @@ def page_entries(entries):
                 + [(c, f"{CACHE}/dates_{c}_*.html") for c in DATES]
                 for p in glob.glob(pat)}
     for conf, edition in sorted(editions):
-        deadlines, loc = edition_data(conf, edition)
+        deadlines, loc, responses = edition_data(conf, edition)
         for rnd, date in deadlines.items():
+            resp = responses.get(rnd) or (responses.get(None) if len(deadlines) == 1 else None)
             entries[(conf, edition, rnd)] = {
                 "conf": conf, "edition": edition, "round": rnd,
                 "deadline": date.isoformat(), "location": loc,
                 "url": page_url(conf, edition), "posted": None,
+                "response": resp.isoformat() if resp else None,
             }
 
 
