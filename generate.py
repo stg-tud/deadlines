@@ -23,14 +23,14 @@ show_all = "--all" in sys.argv
 src = args[0] if args else "deadlines.json"
 dst = args[1] if len(args) > 1 else "index.html"
 
-# fills the "Left" column in the browser (months + days); stays empty without JS
+# fills the relative times in the browser (months + days); stays empty without JS
 SCRIPT = """\
 var now = new Date();
 var t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-document.querySelectorAll("td.left [data-date]").forEach(function (td) {
+document.querySelectorAll(".c [data-date]").forEach(function (td) {
   var p = td.dataset.date.split("-");
   var d = new Date(+p[0], p[1] - 1, +p[2]);
-  if (d < t) { td.textContent = "past"; return; }
+  if (d < t) { td.textContent = "past"; td.parentNode.classList.add("past"); return; }
   var m = (d.getFullYear() - t.getFullYear()) * 12 + d.getMonth() - t.getMonth();
   var a = new Date(t.getFullYear(), t.getMonth() + m, t.getDate());
   if (a > d) { m--; a = new Date(t.getFullYear(), t.getMonth() + m, t.getDate()); }
@@ -102,26 +102,37 @@ hidden = len(events) - len([e for e in rows if not e.get("estimated")])
 rows.sort(key=lambda e: e["deadline"])
 
 esc = html.escape
+
+def cell(main, sub, cls=""):
+    return f'<div class="c{cls}"><span>{main}</span>{sub}</div>'
+
+# 3 columns of two-line cells; from 700px on, the cells dissolve (display: contents) into a 6 column grid
+CSS = (
+    "body { font-family: sans-serif; margin: 0.5em; }"
+    " .g { display: grid; grid-template-columns: repeat(3, auto); width: max-content; max-width: 100%; border-top: 1px solid #ccc; border-left: 1px solid #ccc; }"
+    " .r { display: contents; }"
+    " .c { padding: 4px; border-right: 1px solid #ccc; border-bottom: 1px solid #ccc; }"
+    " .r.est, .c.past { color: #888; } small { display: block; color: #888; } .h { font-weight: bold; }"
+    " @media (min-width: 700px) { .g { grid-template-columns: repeat(6, auto); } .c { display: contents; }"
+    " .c > * { padding: 4px; border-right: 1px solid #ccc; border-bottom: 1px solid #ccc; } }")
 out = ["<!DOCTYPE html>", '<html lang="en"><head><meta charset="utf-8">',
        "<title>Deadlines</title>", "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-       "<style>body { font-family: sans-serif; margin: 0.5em; } table { border-collapse: collapse; }"
-       " td, th { padding: 4px; border: 1px solid #ccc; text-align: left; vertical-align: top; } tr.est { color: #888; } small { display: block; color: #888; }</style></head><body>", "<h1>Deadlines</h1>",
+       f"<style>{CSS}</style></head><body>", "<h1>Deadlines</h1>",
        f"<p>Data downloaded {downloaded}."
        + (f" {hidden} past deadlines hidden." if hidden else "") + "</p>",
-       "<table>",
-       "<tr><th>Conference<br><small>Location</small></th><th>Deadline<br><small>Response</small></th><th>Left</th></tr>"]
+       '<div class="g">',
+       '<div class="r h">' + cell("Conference", "<small>Location</small>") + cell("Deadline", "<small>Left</small>")
+       + cell("Response", "<small>Left</small>") + "</div>"]
 for e in rows:
     name = esc(e["conf"] + (" " + e["round"] if e.get("round") else ""))
     if e.get("url"):
         name = f'<a href="{esc(e["url"], quote=True)}">{name}</a>'
-    loc = f"<small>{esc(short_location(e['location']))}</small>" if e.get("location") else ""
-    out.append(f"<tr{' class=\"est\"' if e.get('estimated') else ''}><td>{name}{loc}</td>"
-               f"<td>{'~' if e.get('estimated') else ''}{pretty(e['deadline'])}"
-               + (f"<small>{'~' if e.get('estimated') else ''}{pretty(e['response'])}</small>" if e.get("response") else "")
-               + "</td>"
-               f"<td class=\"left\"><span data-date=\"{esc(e['deadline'])}\"></span>"
-               + (f"<small data-date=\"{esc(e['response'])}\"></small>" if e.get("response") else "")
-               + "</td></tr>")
-out += ["</table>", "<script>", SCRIPT, "</script>", "</body></html>"]
+    loc = f"<small>{esc(short_location(e['location']))}</small>" if e.get("location") else "<small></small>"
+    tilde = "~" if e.get("estimated") else ""
+    def date_cell(d):
+        return cell(tilde + pretty(d), f'<small data-date="{esc(d)}"></small>') if d else cell("", "<small></small>")
+    out.append(f'<div class="r{" est" if e.get("estimated") else ""}">' + cell(name, loc)
+               + date_cell(e["deadline"]) + date_cell(e.get("response")) + "</div>")
+out += ["</div>", "<script>", SCRIPT, "</script>", "</body></html>"]
 open(dst, "w", encoding="utf-8").write("\n".join(out) + "\n")
 print(f"wrote {len(rows)} rows to {dst}")
